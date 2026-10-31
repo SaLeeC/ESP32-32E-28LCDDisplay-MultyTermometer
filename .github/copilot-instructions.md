@@ -6,16 +6,18 @@
 - Considera `platformio.ini` la fonte canonica per ambiente, scheda, framework, librerie e opzioni di build. Non introdurre flussi di compilazione paralleli.
 - Per i comandi e le procedure d'uso, segui la sezione "Compilazione e caricamento" del [README](../README.md).
 
-## Moduli per dispositivo
+## Moduli per dispositivo e frammenti di codice
 
-- Gestisci ogni tipo di dispositivo o periferica hardware con un modulo dedicato. Tutti i file appartenenti ai moduli devono stare sotto `include/`, per esempio in `include/devices/`; non collocarli in `src/`.
-- Mantieni `src/main.cpp` come punto d'ingresso e coordinamento: include gli header dei moduli e usa le loro interfacce, senza accorpare i dettagli dei singoli dispositivi.
-- In C++, separa dichiarazioni e implementazione quando appropriato, ma non includere direttamente file `.cpp`. PlatformIO compila automaticamente i sorgenti sotto `src/`, non quelli sotto `include/`: preferisci quindi moduli header-only in `include/`, con definizioni `inline` quando necessario. Se un modulo richiede un `.cpp` in `include/`, configura esplicitamente PlatformIO per compilarlo una sola volta.
+- Gestisci ogni tipo di dispositivo o periferica hardware e ogni insieme di funzioni ricorrenti con un modulo dedicato. Tutti i file dei moduli devono stare sotto `include/`, per esempio in `include/devices/`; non collocarli in `src/`.
+- Mantieni `src/main.cpp` come punto d'ingresso e coordinamento. Includi in modo esplicito, nella parte alta del file, le dichiarazioni e i frammenti di codice necessari al progetto.
+- I file `.h` contengono le dichiarazioni e le interfacce. I file `.cpp` dei moduli sotto `include/` sono frammenti sorgente: includili direttamente da `src/main.cpp` con un percorso tra virgolette, per esempio `#include "devices/LCD.cpp"` per `include/devices/LCD.cpp`. Non usare un percorso con `/include/` iniziale.
+- L'inclusione di un `.cpp` fa elaborare il suo contenuto come parte dell'unità di compilazione di `main.cpp`. PlatformIO compila automaticamente i `.cpp` sotto `src/`, ma non i frammenti `.cpp` sotto `include/`: non configurare questi frammenti per una compilazione separata e non duplicarli sotto `src/`.
+- Per attivare o disattivare un modulo, includi o commenta il relativo `#include` in `main.cpp`. Disattiva anche le chiamate e gli altri riferimenti a quel modulo, affinché non rimangano nomi non dichiarati o funzioni mancanti. Mantieni gli header di dichiarazione prima dei frammenti che li usano e rispetta l'ordine richiesto dalle dipendenze tra frammenti.
 
 ## Nomi e dichiarazioni
 
 - Usa nomi completi, parlanti e descrittivi (verbose) per variabili, costanti e funzioni/subroutine; evita abbreviazioni poco chiare.
-- Dichiara in `include/Var.h` le variabili di stato condivise. Definisci ciascuna variabile in un solo file `.cpp`; mantieni le variabili locali nello scope in cui servono.
+- Dichiara in `include/Var.h` le variabili di stato condivise. Definisci ciascuna variabile una sola volta in un frammento `.cpp` incluso da `main.cpp`; mantieni le variabili locali nello scope in cui servono.
 - Definisci le costanti di progetto in `include/Constant.h`, usando una forma compatibile con lo standard C++ configurato in PlatformIO ed evitando definizioni multiple.
-- Dichiara i prototipi di funzioni/subroutine in `include/Sub.h`. Le implementazioni appartenenti a un modulo device devono restare sotto `include/`; applica le regole PlatformIO sopra per assicurarti che siano compilate.
+- Dichiara i prototipi di funzioni/subroutine in `include/Sub.h`. Le implementazioni dei moduli devono restare sotto `include/` ed essere incluse da `main.cpp` secondo le regole sopra.
 - Accompagna ogni dichiarazione con un commento comprensibile a una persona: spiega scopo e uso; per variabili e costanti indica anche unità o intervalli quando pertinenti, e per le funzioni descrivi parametri, valore restituito ed effetti.
