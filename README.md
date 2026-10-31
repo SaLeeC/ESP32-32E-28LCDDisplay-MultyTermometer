@@ -49,6 +49,25 @@ Se necessario specificare la porta con `--upload-port` o `--port` nel monitor.
 Se il caricamento non parte, tenere premuto BOOT durante il reset e rilasciarlo
 quando inizia il trasferimento.
 
+## Organizzazione del firmware
+
+Il firmware e composto da `src/main.cpp` e da moduli inclusi esplicitamente
+dal programma principale. `main.cpp` coordina l'avvio e il ciclo operativo;
+non contiene i dettagli di ogni periferica.
+
+- `include/Constant.h` raccoglie pin, tempi, limiti, colori e parametri grafici.
+- `include/Var.h` raccoglie lo stato condiviso e gli oggetti globali usati dai moduli.
+- `include/Sub.h` elenca le funzioni che i moduli rendono disponibili.
+- `include/devices/` contiene un frammento `.cpp` per ciascuna periferica, come
+  le sonde, il pulsante BOOT e il display.
+
+In `main.cpp` gli include vanno nell'ordine: librerie, `Constant.h`, `Var.h`,
+`Sub.h` e poi i frammenti `.cpp` dei moduli attivi. Questi frammenti vengono
+inseriti nel programma principale dal preprocessore: PlatformIO non li compila
+una seconda volta. Per disattivare un modulo si commenta il suo include e si
+disabilitano anche le chiamate che lo usano. Ogni frammento va incluso una sola
+volta, per evitare definizioni duplicate.
+
 ## Utilizzo
 
 All'avvio vengono identificate fino a otto DS18B20: il monitor seriale associa
