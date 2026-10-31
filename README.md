@@ -1,24 +1,63 @@
 # ESP32-32E-28LCDDisplay-MultyTermometer
 Sistema di misura e registrazione delle temperature rilevate da più sonde con presentazione grafica degli andamenti
 
-## Hardware supportato
+## Risorse della scheda e stato del progetto
 
-Il firmware usa la scheda gialla **ESP32-2432S028R**, con ESP32-WROOM-32E,
-display resistivo da 2,8" **ILI9341** (320×240 in orizzontale).
-Verificare il modello prima dell'acquisto: le varianti ST7789, incluse alcune
-schede con due porte USB, richiedono una diversa configurazione del display.
-La presenza di un gestore batteria non è garantita dal nome CYD: verificare
-lo schema della propria revisione e non collegare una batteria direttamente
-ai pin di alimentazione.
+### Scheda di riferimento
 
-Non servono schede custom. Oltre alla scheda, un cavo/alimentatore USB e i
-cavetti, occorrono da una a **otto sonde DS18B20** e una resistenza da **4,7 kΩ**.
-Touchscreen, SD e audio restano disponibili sull'hardware ma non sono usati
-da questo firmware.
+Il progetto assume la scheda gialla **ESP32-2432S028R**, con modulo
+**ESP32-WROOM-32E** e display resistivo da 2,8" **ILI9341** (320×240,
+orientamento orizzontale). Verificare il modello e la revisione: le varianti
+con display ST7789 o cablaggi differenti possono richiedere un'altra
+configurazione.
 
-### Cablaggio delle sonde
+| Risorsa | Uso attuale | Possibilita o cautela |
+| --- | --- | --- |
+| ESP32-WROOM-32E | Esegue firmware, display e acquisizione delle temperature. | Wi-Fi e Bluetooth sono disponibili nel modulo, ma non sono usati al momento. |
+| Display TFT ILI9341 | Mostra temperature numeriche e grafico. | Collegamenti TFT: MISO GPIO12, MOSI GPIO13, clock GPIO14, CS GPIO15, DC GPIO2 e retroilluminazione GPIO21. Configurazione in `platformio.ini`. |
+| Touch resistivo | Non ancora inizializzato dal firmware. | E previsto come interfaccia operativa per l'operatore. Prima di attivarlo occorre verificare controller, pin e calibrazione della revisione effettiva. |
+| Pulsante BOOT | GPIO0 alterna attualmente vista numerica e grafico. | GPIO0 partecipa anche alla selezione della modalita di avvio; non tenerlo premuto durante il normale reset o l'accensione. |
+| Bus OneWire | GPIO27 legge fino a otto sonde DS18B20 collegate in parallelo. | Alimentare le sonde a 3,3 V e usare una sola resistenza di pull-up da 4,7 kΩ tra GPIO27 e 3,3 V. |
+| Slot microSD | Non usato dal firmware. | La registrazione persistente delle misure potra essere valutata in seguito, dopo aver verificato il cablaggio della scheda. |
+| Audio | Non usato dal firmware. | Disponibilita e componenti effettivi vanno controllati sulla revisione presente. |
+| USB e seriale | Caricamento e monitor seriale a 115200 bit/s. | Non e necessario aggiungere una scheda custom per le funzioni attuali. |
+| Alimentazione | Alimentazione USB della scheda. | La presenza di un gestore batteria non e garantita dal nome CYD: verificare lo schema e non collegare una batteria direttamente ai pin. |
 
-Collegare tutte le sonde in parallelo sul connettore CN1:
+Non portare 5 V sui GPIO. Usare alimentazione a tre fili per le sonde
+DS18B20, non la modalita parassita, e verificare il loro pinout: i colori dei
+cavi non sono standardizzati.
+
+L'ultima compilazione PlatformIO verificata (2026-10-31) ha riportato 25.780
+byte di RAM su 327.680 e 298.957 byte di Flash su 1.310.720. Sono i valori
+riportati per quella build, non una misura completa della memoria dinamica
+disponibile durante l'esecuzione; vanno aggiornati dopo modifiche rilevanti.
+
+### Obiettivo del prodotto e funzioni previste
+
+Il prodotto dovra essere semplice da usare per l'operatore, mantenendo un
+processo interno strutturato e comprensibile. L'involucro previsto sara
+semi-impermeabile ma non certificato IP64; per questo l'operatore dovra poter
+usare il touchscreen come interfaccia, oltre al pulsante fisico quando utile.
+
+Sono previsti questi passi, ancora da progettare e implementare:
+
+1. Supportare piu tipi di sonde; i tipi e il modo in cui rappresentarli
+   saranno definiti in seguito.
+2. Presentare all'avvio una proposta grafica introduttiva, inizialmente con
+   testo di dimensioni e colori diversi. Contenuto e personalizzazione sono
+   da definire.
+3. Guidare l'operatore con tre tocchi sullo schermo: il percorso dovra
+   familiarizzarlo con l'uso del touch e permettere di verificare la
+   calibrazione.
+
+Per ora il firmware caricato usa le DS18B20, mostra valori e grafico e
+permette di cambiare vista con BOOT. Touchscreen, presentazione iniziale,
+guida dei tre tocchi, salvataggio su SD e altri tipi di sonde non sono ancora
+implementati.
+
+### Cablaggio attuale delle sonde
+
+Collegare tutte le DS18B20 in parallelo sul connettore CN1:
 
 | DS18B20 | Scheda |
 | --- | --- |
@@ -27,10 +66,8 @@ Collegare tutte le sonde in parallelo sul connettore CN1:
 | DQ (dati) | GPIO27 |
 
 Collegare **una resistenza da 4,7 kΩ tra GPIO27 e 3,3 V** per l'intero bus.
-Usare alimentazione a tre fili, non la modalità parassita; non portare 5 V
-sul GPIO. Verificare il pinout delle sonde: i colori dei cavi non sono
-standardizzati. GPIO35 è solo ingresso e GPIO21 controlla la retroilluminazione:
-non sono sostituti di GPIO27.
+GPIO35 è solo ingresso e GPIO21 controlla la retroilluminazione: non sono
+sostituti di GPIO27.
 
 ## Compilazione e caricamento
 
