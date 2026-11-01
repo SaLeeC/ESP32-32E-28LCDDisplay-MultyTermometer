@@ -164,6 +164,7 @@ bool initializeSelectedDhtSensor(DhtSensorModel selectedModel, uint8_t dataPin) 
     latestDhtRelativeHumidityPercent = NAN;
     lastDhtMeasurementMilliseconds = millis();
     dhtMeasurementHasBeenAttempted = false;
+    updateMeasurementProcessState();
     temperatureDisplayNeedsRedraw = true;
     Serial.printf(
         "DHT: modello %s selezionato dall'operatore su GPIO%u; misure abilitate.\n",

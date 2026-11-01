@@ -105,9 +105,14 @@ static bool endExternalI2cBusIfInitialized() {
 }
 
 void initializeTemperatureSensorBus() {
+    measurementProcessState =
+        MeasurementProcessState::StoppedNoUsableSensors;
+    temperatureConversionIsPending = false;
+
     if (!endExternalI2cBusIfInitialized()) {
     startupExternalSensorBusCheckResult.mode =
         ExternalSensorBusMode::NoSensorDetected;
+    updateMeasurementProcessState();
     return;
     }
 
@@ -117,7 +122,6 @@ void initializeTemperatureSensorBus() {
     activeDhtExternalSensor = nullptr;
     latestDhtRelativeHumidityPercent = NAN;
     dhtMeasurementHasBeenAttempted = false;
-    temperatureConversionIsPending = false;
     startupExternalSensorBusCheckResult.mode = ExternalSensorBusMode::NotChecked;
     startupExternalSensorBusCheckResult.oneWireDeviceCount = 0;
     startupExternalSensorBusCheckResult.i2cDeviceCount = 0;
@@ -213,20 +217,53 @@ void initializeTemperatureSensorBus() {
         DhtSensorModel::NotSelected;
     Serial.println(
         "Nessun sensore rilevato dopo entrambi i tentativi GPIO: OneWire, DHT e I2C non hanno risposto.");
+    updateMeasurementProcessState();
     return;
     }
 
-    if (startupExternalSensorBusCheckResult.mode !=
-        ExternalSensorBusMode::OneWire ||
-    activeTemperatureProbeCount == 0) {
-    return; // DHT e I2C usano driver separati e non devono ricevere comandi OneWire.
+    updateMeasurementProcessState();
+}
+
+void updateMeasurementProcessState() {
+    if (activeTemperatureProbeCount == 0) {
+        measurementProcessState =
+            MeasurementProcessState::StoppedNoUsableSensors;
+        temperatureConversionIsPending = false;
+        Serial.println(
+            "Acquisizione misure: FERMA, nessuna sonda utilizzabile.");
+        return;
     }
 
-    ds18b20TemperatureSensors.setResolution(DS18B20_RESOLUTION_BITS); // Imposta la precisione della misura e il relativo tempo di conversione.
-    ds18b20TemperatureSensors.setWaitForConversion(false); // Permette al programma di continuare mentre le sonde stanno misurando.
-    ds18b20TemperatureSensors.requestTemperatures(); // Avvia la prima misura per tutte le sonde, senza attenderne qui il completamento.
-    lastTemperatureConversionStartMilliseconds = millis(); // Da questo istante decorre l'attesa della conversione.
-    temperatureConversionIsPending = true; // Il ciclo principale leggera i risultati quando saranno pronti.
+    measurementProcessState = MeasurementProcessState::Running;
+    const uint32_t measurementProcessStartMilliseconds = millis(); // Istante comune da cui decorre la prima acquisizione.
+
+    if (startupExternalSensorBusCheckResult.mode ==
+        ExternalSensorBusMode::OneWire) {
+        ds18b20TemperatureSensors.setResolution(DS18B20_RESOLUTION_BITS); // Imposta la precisione della misura e il relativo tempo di conversione.
+        ds18b20TemperatureSensors.setWaitForConversion(false); // Permette al programma di continuare mentre le sonde stanno misurando.
+        ds18b20TemperatureSensors.requestTemperatures(); // Avvia subito la prima misura per tutte le sonde OneWire.
+        lastTemperatureConversionStartMilliseconds =
+            measurementProcessStartMilliseconds;
+        temperatureConversionIsPending = true;
+    } else if (startupExternalSensorBusCheckResult.mode ==
+               ExternalSensorBusMode::Dht) {
+        lastDhtMeasurementMilliseconds =
+            measurementProcessStartMilliseconds;
+        dhtMeasurementHasBeenAttempted = false; // La prima chiamata utile legge subito il DHT senza attendere l'intervallo.
+    }
+
+    Serial.printf(
+        "Acquisizione misure: ATTIVA con %u sonda/e utilizzabile/i.\n",
+        static_cast<unsigned int>(activeTemperatureProbeCount));
+}
+
+void waitWhileServicingMeasurements(uint32_t durationMilliseconds) {
+    const uint32_t waitStartMilliseconds = millis(); // Istante iniziale usato per gestire correttamente anche il ritorno a zero di millis().
+    do {
+        updateTemperatureMeasurements(millis());
+        delay(1); // Cede tempo alle attivita interne dell'ESP32 senza fermare a lungo le acquisizioni.
+    } while (static_cast<uint32_t>(millis() - waitStartMilliseconds) <
+             durationMilliseconds);
 }
 
 uint8_t discoverTemperatureProbes() {
@@ -306,6 +343,10 @@ void storeTemperatureHistorySample() {
 }
 
 void updateTemperatureMeasurements(uint32_t currentTimeMilliseconds) {
+    if (measurementProcessState != MeasurementProcessState::Running) {
+        return; // Lo switch funzionale impedisce ogni acquisizione quando non esistono sonde utilizzabili.
+    }
+
     if (startupExternalSensorBusCheckResult.mode == ExternalSensorBusMode::Dht) {
         updateDhtSensorMeasurements(currentTimeMilliseconds);
         return;

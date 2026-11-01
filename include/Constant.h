@@ -6,13 +6,24 @@
 
 // Versione visualizzata all'avvio e riportata nell'intestazione di src/main.cpp.
 constexpr uint8_t FIRMWARE_VERSION_FIRST_NUMBER = 1; // Primo gruppo numerico della versione, mostrato prima del punto.
-constexpr uint16_t FIRMWARE_VERSION_SECOND_NUMBER = 29; // Secondo gruppo numerico, mostrato con tre cifre: 029.
+constexpr uint16_t FIRMWARE_VERSION_SECOND_NUMBER = 34; // Secondo gruppo numerico, mostrato con tre cifre: 034.
 constexpr char FIRMWARE_VERSION_RELEASE_DATE[] = "01-11-2026"; // Data associata alla versione, nel formato giorno-mese-anno.
 constexpr char FIRMWARE_VERSION_DISPLAY_FORMAT[] = "v%u.%03u %s"; // Formato completo, per esempio v1.029 01-11-2026.
 constexpr uint8_t FIRMWARE_VERSION_TEXT_BUFFER_CAPACITY = 32; // Spazio in byte per comporre la versione e il terminatore di stringa.
 
 // Configurazione del bus esterno e delle sonde
 constexpr uint32_t SERIAL_MONITOR_BAUD_RATE = 115200; // Velocita del monitor seriale, espressa in bit al secondo.
+constexpr uint8_t BATTERY_VOLTAGE_ADC_GPIO_PIN = 34; // Ingresso ADC1 collegato al punto centrale del partitore della batteria.
+constexpr uint8_t BATTERY_VOLTAGE_SAMPLE_COUNT = 32; // Campioni mediati all'accensione per ridurre il rumore del convertitore ADC.
+constexpr uint16_t BATTERY_VOLTAGE_SAMPLE_INTERVAL_MILLISECONDS = 2; // Pausa tra campioni consecutivi, in millisecondi.
+constexpr uint16_t BATTERY_MINIMUM_LOAD_STABILIZATION_MILLISECONDS = 100; // Attesa con retroilluminazione e WiFi spenti prima della misura a vuoto.
+constexpr uint16_t BATTERY_MAXIMUM_LOAD_STABILIZATION_MILLISECONDS = 150; // Attesa dopo retroilluminazione e WiFi al massimo prima della misura sotto carico.
+constexpr uint8_t ONBOARD_RGB_LED_RED_GPIO_PIN = 22; // Canale rosso attivo LOW; il pin viene rilasciato prima di usare CN1.
+constexpr uint8_t ONBOARD_RGB_LED_GREEN_GPIO_PIN = 16; // Canale verde attivo LOW del LED RGB ad anodo comune.
+constexpr uint8_t ONBOARD_RGB_LED_BLUE_GPIO_PIN = 17; // Canale blu attivo LOW del LED RGB ad anodo comune.
+constexpr uint8_t BATTERY_VOLTAGE_DIVIDER_MULTIPLIER = 2; // Rapporto del partitore formato nello schema da due resistenze uguali da 100 kOhm.
+constexpr uint16_t BATTERY_NOT_DETECTED_MAXIMUM_MILLIVOLTS = 2500; // Sotto 2,5 V non e presente una tensione compatibile con una LiPo collegata.
+constexpr uint16_t BATTERY_PLAUSIBLE_MAXIMUM_MILLIVOLTS = 4400; // Sopra 4,4 V la lettura non e compatibile con la batteria LiPo da 3,7 V prevista.
 constexpr uint8_t EXTERNAL_SENSOR_PRIMARY_GPIO_PIN = 27; // Primo GPIO del connettore CN1 nella configurazione standard.
 constexpr uint8_t EXTERNAL_SENSOR_SECONDARY_GPIO_PIN = 22; // Secondo GPIO CN1, scambiato col primario nel secondo tentativo.
 constexpr uint8_t DS18B20_DATA_PIN = EXTERNAL_SENSOR_PRIMARY_GPIO_PIN; // GPIO dati OneWire iniziale; il test alternativo usa GPIO22.
@@ -35,11 +46,32 @@ enum class ExternalI2cSensorIdentificationMethod : uint8_t {
     ProductIdentifierCommand // Un comando specifico restituisce un identificatore di prodotto.
 };
 
-// Descrive una famiglia di sensori I2C nota e le informazioni utili a riconoscerla in futuro.
+// Seleziona il driver compilato che sa inizializzare e leggere il modello I2C.
+enum class ExternalI2cSensorDriverKind : uint8_t {
+    AdafruitMcp9808, // Driver Adafruit per MCP9808.
+    AdafruitAhtx0, // Driver Adafruit condiviso da AHT10, AHT20 e DHT20.
+    AdafruitSi7021, // Driver Adafruit specifico per Si7021.
+    AdafruitHtu21df, // Driver Adafruit specifico per HTU21D/HTU21DF.
+    GenericHdc1080, // Driver ClosedCube distribuito come Generic HDC1080.
+    AdafruitSht31, // Driver Adafruit per il protocollo Sensirion SHT3x.
+    AdafruitSht4x, // Driver Adafruit per il protocollo Sensirion SHT4x.
+    SparkFunTmp102, // Driver SparkFun per TMP102.
+    SparkFunTmp117, // Driver SparkFun per TMP117.
+    Lm75Derived, // Driver comune per i dispositivi derivati da LM75.
+    AdafruitAm2320, // Driver Adafruit per AM2320.
+    RobTillaartDht12, // Driver RobTillaart per DHT12 in modalita I2C.
+    AdafruitShtc3, // Driver Adafruit per SHTC3.
+    AdafruitBmp280, // Driver Adafruit per BMP280.
+    AdafruitBme280, // Driver Adafruit per BME280.
+    BoschBme68x // Driver ufficiale Bosch condiviso da BME680 e BME688.
+};
+
+// Descrive un modello I2C noto e le informazioni utili a riconoscerlo e leggerlo.
 struct ExternalI2cSensorCatalogEntry {
-    const char* familyName; // Nome leggibile della famiglia o del gruppo di dispositivi compatibili.
-    uint8_t firstAddress; // Primo indirizzo I2C a 7 bit assegnabile alla famiglia.
-    uint8_t lastAddress; // Ultimo indirizzo I2C a 7 bit assegnabile alla famiglia.
+    const char* familyName; // Nome leggibile del modello o del suo alias commerciale.
+    ExternalI2cSensorDriverKind driverKind; // Driver compilato da associare al dispositivo dopo l'identificazione.
+    uint8_t firstAddress; // Primo indirizzo I2C a 7 bit assegnabile al modello.
+    uint8_t lastAddress; // Ultimo indirizzo I2C a 7 bit assegnabile al modello.
     bool measuresTemperature; // True se il dispositivo fornisce la temperatura.
     bool measuresHumidity; // True se il dispositivo fornisce l'umidita relativa.
     bool measuresPressure; // True se il dispositivo fornisce la pressione atmosferica.
@@ -55,45 +87,93 @@ struct ExternalI2cSensorCatalogEntry {
 };
 
 /*
- * Catalogo iniziale dei sensori di temperatura e umidita piu diffusi.
+ * Catalogo dei sensori di temperatura e umidita previsti.
  * L'indirizzo restringe i candidati ma non identifica sempre il modello:
- * le future routine dovranno applicare anche il metodo indicato in ogni riga.
+ * le routine di validazione devono applicare anche il metodo indicato.
  */
 constexpr ExternalI2cSensorCatalogEntry EXTERNAL_I2C_SENSOR_CATALOG[] = {
-    {"MCP9808", 0x18, 0x1F, true, false, false, false, -40.0f, 125.0f, 0.25f, 0.0625f,
+    {"MCP9808", ExternalI2cSensorDriverKind::AdafruitMcp9808, 0x18, 0x1F, true, false, false, false, -40.0f, 125.0f, 0.25f, 0.0625f,
      ExternalI2cSensorIdentificationMethod::SixteenBitRegister, 0x07, 0x0400, 0xFF00},
-    {"AHT10 / AHT20 / DHT20", 0x38, 0x38, true, true, false, false, -40.0f, 80.0f, 0.5f, 0.01f,
+    {"AHT10", ExternalI2cSensorDriverKind::AdafruitAhtx0, 0x38, 0x38, true, true, false, false, -40.0f, 85.0f, 0.3f, 0.01f,
      ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
-    {"Si7021 / HTU21D", 0x40, 0x40, true, true, false, false, -40.0f, 125.0f, 0.4f, 0.01f,
+    {"AHT20", ExternalI2cSensorDriverKind::AdafruitAhtx0, 0x38, 0x38, true, true, false, false, -40.0f, 85.0f, 0.3f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"DHT20", ExternalI2cSensorDriverKind::AdafruitAhtx0, 0x38, 0x38, true, true, false, false, -40.0f, 80.0f, 0.5f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"Si7021", ExternalI2cSensorDriverKind::AdafruitSi7021, 0x40, 0x40, true, true, false, false, -40.0f, 125.0f, 0.4f, 0.01f,
      ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0xFA0F, 0x0000, 0x0000},
-    {"HDC1080", 0x40, 0x40, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
+    {"HTU21D", ExternalI2cSensorDriverKind::AdafruitHtu21df, 0x40, 0x40, true, true, false, false, -40.0f, 125.0f, 0.3f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0xFA0F, 0x0000, 0x0000},
+    {"HDC1080", ExternalI2cSensorDriverKind::GenericHdc1080, 0x40, 0x40, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
      ExternalI2cSensorIdentificationMethod::SixteenBitRegister, 0x00FF, 0x1050, 0xFFFF},
-    {"SHT30 / SHT31 / SHT35", 0x44, 0x45, true, true, false, false, -40.0f, 125.0f, 0.3f, 0.01f,
+    {"SHT30", ExternalI2cSensorDriverKind::AdafruitSht31, 0x44, 0x45, true, true, false, false, -40.0f, 125.0f, 0.3f, 0.01f,
      ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x3780, 0x0000, 0x0000},
-    {"SHT40 / SHT41 / SHT45", 0x44, 0x44, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
+    {"SHT31", ExternalI2cSensorDriverKind::AdafruitSht31, 0x44, 0x45, true, true, false, false, -40.0f, 125.0f, 0.3f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x3780, 0x0000, 0x0000},
+    {"SHT35", ExternalI2cSensorDriverKind::AdafruitSht31, 0x44, 0x45, true, true, false, false, -40.0f, 125.0f, 0.1f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x3780, 0x0000, 0x0000},
+    {"SHT40", ExternalI2cSensorDriverKind::AdafruitSht4x, 0x44, 0x44, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
      ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x0089, 0x0000, 0x0000},
-    {"TMP102", 0x48, 0x4B, true, false, false, false, -40.0f, 125.0f, 0.5f, 0.0625f,
+    {"SHT41", ExternalI2cSensorDriverKind::AdafruitSht4x, 0x44, 0x44, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x0089, 0x0000, 0x0000},
+    {"SHT45", ExternalI2cSensorDriverKind::AdafruitSht4x, 0x44, 0x44, true, true, false, false, -40.0f, 125.0f, 0.1f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::SerialNumberCommand, 0x0089, 0x0000, 0x0000},
+    {"TMP102", ExternalI2cSensorDriverKind::SparkFunTmp102, 0x48, 0x4B, true, false, false, false, -40.0f, 125.0f, 0.5f, 0.0625f,
      ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
-    {"TMP117", 0x48, 0x4B, true, false, false, false, -55.0f, 150.0f, 0.1f, 0.0078125f,
+    {"TMP117", ExternalI2cSensorDriverKind::SparkFunTmp117, 0x48, 0x4B, true, false, false, false, -55.0f, 150.0f, 0.1f, 0.0078125f,
      ExternalI2cSensorIdentificationMethod::SixteenBitRegister, 0x000F, 0x0117, 0xFFFF},
-    {"LM75 e compatibili", 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.125f,
+    {"LM75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.5f,
      ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
-    {"AM2320", 0x5C, 0x5C, true, true, false, false, -40.0f, 80.0f, 0.5f, 0.1f,
+    {"LM75A", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.125f,
      ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
-    {"DHT12", 0x5C, 0x5C, true, true, false, false, -20.0f, 60.0f, 0.5f, 0.1f,
+    {"LM75B", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.125f,
      ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
-    {"SHTC3", 0x70, 0x70, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
-     ExternalI2cSensorIdentificationMethod::ProductIdentifierCommand, 0xEFC8, 0x0000, 0x0000},
-    {"BMP280", 0x76, 0x77, true, false, true, false, -40.0f, 85.0f, 1.0f, 0.01f,
+    {"TMP75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -40.0f, 125.0f, 2.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"TMP75B", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"TMP175", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -40.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"TMP275", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -40.0f, 125.0f, 0.5f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"PCT2075", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.125f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"TCN75A", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"MCP9800", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"MCP9801", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"MCP9802", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"MCP9803", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 1.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"STLM75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.5f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"STDS75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 3.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"ADT75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"DS75", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 2.0f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"DS7505", ExternalI2cSensorDriverKind::Lm75Derived, 0x48, 0x4F, true, false, false, false, -55.0f, 125.0f, 0.5f, 0.0625f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"AM2320", ExternalI2cSensorDriverKind::AdafruitAm2320, 0x5C, 0x5C, true, true, false, false, -40.0f, 80.0f, 0.5f, 0.1f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"DHT12 I2C", ExternalI2cSensorDriverKind::RobTillaartDht12, 0x5C, 0x5C, true, true, false, false, -20.0f, 60.0f, 0.5f, 0.1f,
+     ExternalI2cSensorIdentificationMethod::ProtocolResponse, 0x0000, 0x0000, 0x0000},
+    {"SHTC3", ExternalI2cSensorDriverKind::AdafruitShtc3, 0x70, 0x70, true, true, false, false, -40.0f, 125.0f, 0.2f, 0.01f,
+     ExternalI2cSensorIdentificationMethod::ProductIdentifierCommand, 0xEFC8, 0x0807, 0x083F},
+    {"BMP280", ExternalI2cSensorDriverKind::AdafruitBmp280, 0x76, 0x77, true, false, true, false, -40.0f, 85.0f, 1.0f, 0.01f,
      ExternalI2cSensorIdentificationMethod::EightBitRegister, 0x00D0, 0x0058, 0x00FF},
-    {"BME280", 0x76, 0x77, true, true, true, false, -40.0f, 85.0f, 1.0f, 0.01f,
+    {"BME280", ExternalI2cSensorDriverKind::AdafruitBme280, 0x76, 0x77, true, true, true, false, -40.0f, 85.0f, 1.0f, 0.01f,
      ExternalI2cSensorIdentificationMethod::EightBitRegister, 0x00D0, 0x0060, 0x00FF},
-    {"BME680 / BME688", 0x76, 0x77, true, true, true, true, -40.0f, 85.0f, 1.0f, 0.01f,
+    {"BME680 / BME688", ExternalI2cSensorDriverKind::BoschBme68x, 0x76, 0x77, true, true, true, true, -40.0f, 85.0f, 1.0f, 0.01f,
      ExternalI2cSensorIdentificationMethod::EightBitRegister, 0x00D0, 0x0061, 0x00FF}
 };
 constexpr size_t EXTERNAL_I2C_SENSOR_CATALOG_ENTRY_COUNT =
     sizeof(EXTERNAL_I2C_SENSOR_CATALOG) /
-    sizeof(EXTERNAL_I2C_SENSOR_CATALOG[0]); // Numero di famiglie disponibili nel catalogo per le future ricerche.
+    sizeof(EXTERNAL_I2C_SENSOR_CATALOG[0]); // Numero di modelli disponibili nel catalogo per le future ricerche.
 
 constexpr uint8_t MAXIMUM_PROBE_COUNT = 8; // Numero massimo di sonde che il firmware puo gestire.
 constexpr uint8_t MAXIMUM_ONEWIRE_SENSOR_COUNT = 8; // Numero massimo di dispositivi OneWire registrati con i riferimenti al catalogo.
@@ -105,9 +185,18 @@ constexpr uint32_t DS18B20_CONVERSION_DURATION_MILLISECONDS = 750; // Attesa nec
 constexpr uint32_t TEMPERATURE_SAMPLE_INTERVAL_MILLISECONDS = 1000; // Intervallo tra l'avvio di due misure, in millisecondi.
 constexpr uint16_t TEMPERATURE_HISTORY_CAPACITY = 120; // Campioni conservati per sonda: circa 2 minuti OneWire o 4 minuti DHT22.
 
+// Seleziona il driver disponibile per un modello Dallas/Maxim 1-Wire.
+enum class OneWireSensorDriverKind : uint8_t {
+    DallasTemperature, // Driver condiviso per le famiglie gestite dalla libreria DallasTemperature.
+    CustomMax31825, // Adattatore futuro per formato e indirizzamento specifici del MAX31825.
+    CustomMax31826, // Adattatore futuro per MAX31826 e la sua EEPROM integrata.
+    CustomDs1923 // Driver futuro per temperatura, umidita e memoria missione del DS1923.
+};
+
 // Descrive una famiglia di sensori compatibile con il protocollo Dallas/Maxim 1-Wire.
 struct OneWireSensorCatalogEntry {
     const char* familyName; // Nome leggibile del dispositivo candidato.
+    OneWireSensorDriverKind driverKind; // Driver compilato o adattatore richiesto per consultare il modello.
     uint8_t familyCode; // Primo byte dell'indirizzo ROM a 64 bit, assegnato dal produttore alla famiglia.
     bool measuresTemperature; // True se il dispositivo fornisce la temperatura.
     bool measuresHumidity; // True se il dispositivo fornisce anche l'umidita relativa.
@@ -125,15 +214,15 @@ struct OneWireSensorCatalogEntry {
  * single-wire, incompatibile con il bus 1-Wire e con la libreria OneWire.
  */
 constexpr OneWireSensorCatalogEntry ONE_WIRE_SENSOR_CATALOG[] = {
-    {"DS18S20", 0x10, true, false, -55.0f, 125.0f, 0.5f, 0.5f},
-    {"DS1822", 0x22, true, false, -55.0f, 125.0f, 2.0f, 0.0625f},
-    {"DS18B20", 0x28, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
-    {"MAX31820", 0x28, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
-    {"DS1825", 0x3B, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
-    {"MAX31825", 0x3B, true, false, -45.0f, 145.0f, 1.0f, 0.0625f},
-    {"MAX31826", 0x3F, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
-    {"DS1923 Hygrochron", 0x41, true, true, -20.0f, 85.0f, 0.5f, 0.0625f},
-    {"DS28EA00", 0x42, true, false, -40.0f, 85.0f, 0.5f, 0.0625f}
+    {"DS18S20", OneWireSensorDriverKind::DallasTemperature, 0x10, true, false, -55.0f, 125.0f, 0.5f, 0.5f},
+    {"DS1822", OneWireSensorDriverKind::DallasTemperature, 0x22, true, false, -55.0f, 125.0f, 2.0f, 0.0625f},
+    {"MAX31826", OneWireSensorDriverKind::CustomMax31826, 0x26, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
+    {"DS18B20", OneWireSensorDriverKind::DallasTemperature, 0x28, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
+    {"MAX31820", OneWireSensorDriverKind::DallasTemperature, 0x28, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
+    {"DS1825", OneWireSensorDriverKind::DallasTemperature, 0x3B, true, false, -55.0f, 125.0f, 0.5f, 0.0625f},
+    {"MAX31825", OneWireSensorDriverKind::CustomMax31825, 0x3B, true, false, -45.0f, 145.0f, 1.0f, 0.0625f},
+    {"DS1923 Hygrochron", OneWireSensorDriverKind::CustomDs1923, 0x41, true, true, -20.0f, 85.0f, 0.5f, 0.0625f},
+    {"DS28EA00", OneWireSensorDriverKind::DallasTemperature, 0x42, true, false, -40.0f, 85.0f, 3.0f, 0.0625f}
 };
 constexpr size_t ONE_WIRE_SENSOR_CATALOG_ENTRY_COUNT =
     sizeof(ONE_WIRE_SENSOR_CATALOG) /
@@ -148,9 +237,17 @@ enum class DhtSensorModel : uint8_t {
     Dht22 // Modello noto anche come AM2302, con migliore accuratezza dell'umidita.
 };
 
+// Seleziona il driver previsto per il formato dati del modello DHT.
+enum class DhtSensorDriverKind : uint8_t {
+    AdafruitDht, // Driver Adafruit per DHT11, DHT21 e DHT22 single-wire.
+    CustomDht12SingleWire, // Adattatore futuro per il formato single-wire DHT12.
+    RobTillaartDht12I2c // Driver RobTillaart per la modalita I2C del DHT12.
+};
+
 // Descrive un sensore che usa il protocollo proprietario single-wire della famiglia DHT.
 struct DhtSensorCatalogEntry {
     DhtSensorModel model; // Valore usato dal driver per scegliere formato dati e limiti di misura.
+    DhtSensorDriverKind driverKind; // Driver da usare dopo la selezione o identificazione del modello.
     const char* modelName; // Nome leggibile del sensore e degli eventuali equivalenti commerciali.
     bool supportsProprietarySingleWire; // True se il modello usa il protocollo temporizzato DHT su un filo dati.
     bool supportsI2c; // True se il modello offre anche una modalita I2C separata.
@@ -173,13 +270,13 @@ struct DhtSensorCatalogEntry {
  * Il rilevamento non distingue i modelli: DHT11 o DHT22 va scelto dall'operatore.
  */
 constexpr DhtSensorCatalogEntry DHT_SENSOR_CATALOG[] = {
-    {DhtSensorModel::Dht11, "DHT11", true, false, 0x00,
+    {DhtSensorModel::Dht11, DhtSensorDriverKind::AdafruitDht, "DHT11", true, false, 0x00,
      0.0f, 50.0f, 2.0f, 1.0f, 20.0f, 90.0f, 5.0f, 1.0f},
-    {DhtSensorModel::Dht12, "DHT12", true, true, 0x5C,
+    {DhtSensorModel::Dht12, DhtSensorDriverKind::CustomDht12SingleWire, "DHT12", true, true, 0x5C,
      -20.0f, 60.0f, 0.5f, 0.1f, 20.0f, 95.0f, 5.0f, 0.1f},
-    {DhtSensorModel::Dht21, "DHT21 / AM2301", true, false, 0x00,
+    {DhtSensorModel::Dht21, DhtSensorDriverKind::AdafruitDht, "DHT21 / AM2301", true, false, 0x00,
      -40.0f, 80.0f, 0.5f, 0.1f, 0.0f, 100.0f, 3.0f, 0.1f},
-    {DhtSensorModel::Dht22, "DHT22 / AM2302", true, false, 0x00,
+    {DhtSensorModel::Dht22, DhtSensorDriverKind::AdafruitDht, "DHT22 / AM2302", true, false, 0x00,
      -40.0f, 80.0f, 0.5f, 0.1f, 0.0f, 100.0f, 2.0f, 0.1f}
 };
 constexpr size_t DHT_SENSOR_CATALOG_ENTRY_COUNT =
@@ -347,8 +444,12 @@ constexpr int16_t SONDARIS_LOGO_INNER_ORBIT_RADIUS_Y_PIXELS = 22; // Semialtezza
 constexpr int16_t SONDARIS_LOGO_PLANET_RADIUS_PIXELS = 28; // Raggio del pianeta stilizzato, in pixel.
 constexpr int16_t SONDARIS_LOGO_WORDMARK_Y_PIXELS = 117; // Coordinata verticale del nome SondAris, in pixel.
 constexpr int16_t SONDARIS_LOGO_DESCRIPTION_Y_PIXELS = 174; // Coordinata verticale della prima riga sotto il logo, in pixel.
+constexpr int16_t STARTUP_BATTERY_STATUS_Y_PIXELS = 198; // Coordinata verticale della diagnostica di alimentazione sotto la descrizione.
 constexpr uint8_t SONDARIS_LOGO_WORDMARK_FONT = 4; // Font TFT_eSPI per evidenziare il nome del progetto.
 constexpr int16_t STARTUP_PRESENTATION_VERSION_Y_PIXELS = 222; // Coordinata verticale della versione firmware, in pixel.
+constexpr uint8_t STARTUP_BATTERY_STATUS_TEXT_BUFFER_CAPACITY = 48; // Spazio per tensione, presenza e fonte di alimentazione dedotta.
+constexpr char STARTUP_BATTERY_LOAD_TEST_FORMAT[] = "BAT+ %.2f V  dLoad %+.2f V"; // Mostra tensione a carico minimo e variazione al massimo carico disponibile.
+constexpr char STARTUP_BATTERY_LOAD_TEST_ERROR_FORMAT[] = "BAT+ %.2f V  test carico ERR"; // Segnala che non e stato possibile applicare tutto il carico previsto.
 constexpr uint16_t SONDARIS_LOGO_OUTER_ORBIT_COLOR = TFT_DARKCYAN; // Colore profondo per il percorso orbitale esterno.
 constexpr uint16_t SONDARIS_LOGO_INNER_ORBIT_COLOR = TFT_CYAN; // Colore luminoso per il percorso orbitale interno.
 constexpr uint16_t SONDARIS_LOGO_PLANET_COLOR = TFT_NAVY; // Colore scuro della sfera.

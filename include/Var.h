@@ -72,9 +72,19 @@ uint16_t nextTemperatureHistoryWriteIndex = 0; // Posizione in cui verra scritto
 uint16_t storedTemperatureHistorySampleCount = 0; // Campioni gia presenti nello storico per ciascuna sonda.
 uint32_t lastTemperatureConversionStartMilliseconds = 0; // Istante millis() in cui e stata avviata l'ultima conversione.
 bool temperatureConversionIsPending = false; // Indica se una conversione e in corso e non e ancora pronta da leggere.
+MeasurementProcessState measurementProcessState =
+    MeasurementProcessState::StoppedNoUsableSensors; // Mantiene fermo il processo finche non esiste almeno una sonda configurata.
 bool graphViewIsActive = false; // False mostra i valori numerici; true mostra il grafico temporale.
 bool technicalMenuIsActive = false; // True mostra il menu tecnico aperto dal pulsante ingranaggio.
 bool temperatureDisplayNeedsRedraw = true; // Richiede il ridisegno dello schermo dopo una nuova misura o un cambio vista.
+StartupBatteryCheckResult startupBatteryCheckResult = { // Misura del ramo batteria eseguita una sola volta durante l'accensione.
+    0,
+    0,
+    0,
+    0,
+    false,
+    StartupPowerAssessment::BatteryVoltageOutOfRange
+};
 MicroSdCardCheckResult startupMicroSdCardCheckResult = { // Stato microSD conservato per riepilogo di avvio e menu tecnico.
     MicroSdCardCheckStatus::NotDetected,
     0,

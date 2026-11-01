@@ -170,6 +170,12 @@ void initializeTemperatureDisplay() {
 
 void drawStartupPresentation() {
     const int16_t screenCenterX = temperatureDisplay.width() / 2; // Punto centrale orizzontale usato per allineare i testi.
+    char batteryStatusText[STARTUP_BATTERY_STATUS_TEXT_BUFFER_CAPACITY]; // Riga con tensione e deduzione preliminare dell'alimentazione.
+    const float batteryVoltageVolts =
+        startupBatteryCheckResult.batteryVoltageMillivolts / 1000.0f; // Tensione in volt con due decimali per la lettura a schermo.
+    const float loadVoltageChangeVolts =
+        startupBatteryCheckResult.loadVoltageChangeMillivolts /
+        1000.0f; // Variazione con segno tra carico minimo e massimo, espressa in volt.
     temperatureDisplay.fillScreen(TFT_BLACK);
 
     if (!drawSondArisLogoFromPng()) {
@@ -191,6 +197,32 @@ void drawStartupPresentation() {
         SONDARIS_LOGO_DESCRIPTION,
         screenCenterX,
         SONDARIS_LOGO_DESCRIPTION_Y_PIXELS,
+        TEMPERATURE_DISPLAY_GRAPH_FONT);
+
+    const char* batteryStatusFormat = STARTUP_BATTERY_LOAD_TEST_FORMAT; // Formato predefinito con riposo e risposta al carico.
+    uint16_t batteryStatusColor = TFT_YELLOW; // Il giallo evidenzia che la fonte resta da verificare.
+    if (startupBatteryCheckResult.powerAssessment ==
+        StartupPowerAssessment::UsbWithoutDetectedBattery) {
+        batteryStatusColor = TFT_CYAN;
+    } else if (startupBatteryCheckResult.powerAssessment ==
+               StartupPowerAssessment::BatteryVoltageOutOfRange) {
+        batteryStatusColor = TFT_ORANGE;
+    }
+    if (!startupBatteryCheckResult.loadTestWasCompleted) {
+        batteryStatusFormat = STARTUP_BATTERY_LOAD_TEST_ERROR_FORMAT;
+    }
+    snprintf(
+        batteryStatusText,
+        sizeof(batteryStatusText),
+        batteryStatusFormat,
+        static_cast<double>(batteryVoltageVolts),
+        static_cast<double>(loadVoltageChangeVolts));
+    temperatureDisplay.setTextFont(TEMPERATURE_DISPLAY_GRAPH_FONT);
+    temperatureDisplay.setTextColor(batteryStatusColor, TFT_BLACK);
+    temperatureDisplay.drawCentreString(
+        batteryStatusText,
+        screenCenterX,
+        STARTUP_BATTERY_STATUS_Y_PIXELS,
         TEMPERATURE_DISPLAY_GRAPH_FONT);
 
     drawFirmwareVersionLabel(STARTUP_PRESENTATION_VERSION_Y_PIXELS);

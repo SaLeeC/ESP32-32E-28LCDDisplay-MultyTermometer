@@ -52,7 +52,7 @@ bool resistiveTouchPanelIsPressed() {
  */
 void waitForBootButtonRelease() {
     while (digitalRead(BOOT_BUTTON_PIN) == LOW) {
-        delay(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
     }
 }
 
@@ -67,7 +67,7 @@ bool waitForTouchReleaseOrBootButton() {
             return false; // false indica che BOOT e stato usato per uscire dall'attesa.
         }
 
-        delay(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
     }
 
     return true; // true indica che il dito e stato sollevato normalmente.
@@ -95,7 +95,7 @@ TouchTargetCaptureResult captureTouchCalibrationTarget(
             return TouchTargetCaptureResult::TimedOut; // Non lascia la schermata di avvio in attesa senza spiegazioni.
         }
 
-        delay(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
     }
 
     drawTouchCalibrationTargetFeedback(
@@ -131,7 +131,7 @@ TouchTargetCaptureResult captureTouchCalibrationTarget(
             ++rejectedTouchSampleCount;
         }
 
-        delay(STARTUP_TOUCH_CALIBRATION_SAMPLE_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_CALIBRATION_SAMPLE_INTERVAL_MILLISECONDS);
     }
 
     if (usableTouchSampleCount == 0) {
@@ -175,7 +175,7 @@ TouchTargetCaptureResult captureTouchCalibrationTarget(
         static_cast<unsigned int>(usableTouchSampleCount),
         static_cast<int>(capturedRawPoint.rawX),
         static_cast<int>(capturedRawPoint.rawY));
-    delay(STARTUP_TOUCH_CAPTURE_FEEDBACK_DURATION_MILLISECONDS);
+    waitWhileServicingMeasurements(STARTUP_TOUCH_CAPTURE_FEEDBACK_DURATION_MILLISECONDS);
     return TouchTargetCaptureResult::Captured;
 }
 
@@ -199,7 +199,7 @@ TouchRecoveryChoice waitForTouchRetryOrBootButton(
             return TouchRecoveryChoice::ContinueWithBootButton;
         }
 
-        delay(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
     }
 }
 
@@ -291,7 +291,7 @@ void continueWithoutTouchCalibration() {
     resistiveTouchPressHasBeenHandled = false;
     Serial.println("AVVISO: touch non verificato; resta disponibile il pulsante BOOT.");
     drawTouchCalibrationBypassed();
-    delay(STARTUP_TOUCH_BYPASS_MESSAGE_DURATION_MILLISECONDS);
+    waitWhileServicingMeasurements(STARTUP_TOUCH_BYPASS_MESSAGE_DURATION_MILLISECONDS);
 }
 
 } // namespace
@@ -365,7 +365,7 @@ void runStartupTouchExperience() {
             resistiveTouchPressHasBeenHandled = false;
             Serial.println("Touch verificato e calibrato per questa accensione.");
             drawTouchCalibrationSuccess();
-            delay(STARTUP_TOUCH_SUCCESS_MESSAGE_DURATION_MILLISECONDS);
+            waitWhileServicingMeasurements(STARTUP_TOUCH_SUCCESS_MESSAGE_DURATION_MILLISECONDS);
             return;
         }
 
@@ -426,7 +426,7 @@ void runStartupDhtSensorModelSelection() {
             "DHT: modello non scelto perche il touch non e calibrato; misure disattivate.");
         drawDhtSensorModelSelectionResult(
             DHT_MODEL_SELECTION_NO_TOUCH_MESSAGE);
-        delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+        waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
         return;
     }
 
@@ -441,7 +441,7 @@ void runStartupDhtSensorModelSelection() {
                 "DHT: scelta modello annullata con BOOT; misure disattivate.");
             drawDhtSensorModelSelectionResult(
                 DHT_MODEL_SELECTION_BOOT_MESSAGE);
-            delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+            waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
             return;
         }
 
@@ -472,7 +472,7 @@ void runStartupDhtSensorModelSelection() {
                     "DHT: scelta modello annullata con BOOT; misure disattivate.");
                 drawDhtSensorModelSelectionResult(
                     DHT_MODEL_SELECTION_BOOT_MESSAGE);
-                delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+                waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
                 return;
             }
 
@@ -483,7 +483,7 @@ void runStartupDhtSensorModelSelection() {
                             startupExternalSensorBusCheckResult.pinMapping))) {
                     drawDhtSensorModelSelectionResult(
                         DHT_MODEL_SELECTION_COMPLETE_MESSAGE);
-                    delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+                    waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
                     return;
                 }
 
@@ -491,18 +491,18 @@ void runStartupDhtSensorModelSelection() {
                     "DHT: impossibile configurare il modello scelto; misure disattivate.");
                 drawDhtSensorModelSelectionResult(
                     DHT_MODEL_SELECTION_ERROR_MESSAGE);
-                delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+                waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
                 return;
             }
         }
 
-        delay(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_TOUCH_WAIT_POLL_INTERVAL_MILLISECONDS);
     }
 
     Serial.println(
         "DHT: timeout scelta modello; misure disattivate fino al prossimo avvio.");
     drawDhtSensorModelSelectionResult(DHT_MODEL_SELECTION_TIMEOUT_MESSAGE);
-    delay(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
+    waitWhileServicingMeasurements(DHT_MODEL_SELECTION_FEEDBACK_DURATION_MILLISECONDS);
 }
 
 void runStartupNoSensorRecovery() {
@@ -541,7 +541,7 @@ void runStartupNoSensorRecovery() {
                 }
             }
 
-            delay(STARTUP_NO_SENSOR_POLL_INTERVAL_MILLISECONDS);
+            waitWhileServicingMeasurements(STARTUP_NO_SENSOR_POLL_INTERVAL_MILLISECONDS);
         }
 
         drawStartupSensorSearchProgressScreen();
@@ -554,7 +554,7 @@ void runStartupNoSensorRecovery() {
         drawStartupSummaryScreen(
             startupMicroSdCardCheckResult,
             startupExternalSensorBusCheckResult);
-        delay(STARTUP_SENSOR_RETRY_SUMMARY_DURATION_MILLISECONDS);
+        waitWhileServicingMeasurements(STARTUP_SENSOR_RETRY_SUMMARY_DURATION_MILLISECONDS);
         runStartupDhtSensorModelSelection();
     }
 }

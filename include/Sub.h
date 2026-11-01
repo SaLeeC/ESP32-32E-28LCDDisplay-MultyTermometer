@@ -6,6 +6,27 @@
 #include "Constant.h"
 
 /*
+ * Riassume cio che si puo dedurre dalla sola tensione BAT_ADC presente su GPIO34.
+ */
+enum class StartupPowerAssessment : uint8_t {
+    UsbWithoutDetectedBattery, // La scheda e accesa ma sul ramo batteria non compare una tensione da LiPo.
+    BatteryNodeVoltageDetected, // BAT+ e plausibile, ma non dimostra la presenza della batteria ne distingue la fonte.
+    BatteryVoltageOutOfRange // La tensione calcolata non e compatibile con il circuito documentato.
+};
+
+/*
+ * Conserva la media ADC e la tensione batteria ricostruita dal partitore 100 kOhm/100 kOhm.
+ */
+struct StartupBatteryCheckResult {
+    uint16_t adcVoltageMillivolts; // Tensione media letta direttamente su GPIO34, in millivolt.
+    uint16_t batteryVoltageMillivolts; // Tensione stimata prima del partitore, in millivolt.
+    uint16_t maximumLoadBatteryVoltageMillivolts; // Tensione BAT+ con retroilluminazione massima e scansione WiFi attiva, in millivolt.
+    int16_t loadVoltageChangeMillivolts; // Differenza carico massimo meno carico minimo; un valore negativo indica una caduta.
+    bool loadTestWasCompleted; // True se retroilluminazione e radio hanno applicato tutto il carico previsto.
+    StartupPowerAssessment powerAssessment; // Deduzione prudente ottenuta dalla tensione misurata.
+};
+
+/*
  * Distingue la scheda non raggiungibile, l'errore del filesystem e il montaggio riuscito.
  */
 enum class MicroSdCardCheckStatus : uint8_t {
@@ -47,6 +68,14 @@ enum class ExternalSensorBusMode : uint8_t {
 };
 
 /*
+ * Indica se il processo periodico di acquisizione deve restare fermo o lavorare.
+ */
+enum class MeasurementProcessState : uint8_t {
+    StoppedNoUsableSensors, // Nessuna sonda leggibile e configurata: non vengono richieste misure.
+    Running // Almeno una sonda e utilizzabile: le misure periodiche sono abilitate.
+};
+
+/*
  * Rappresenta l'assegnazione standard o scambiata dei due GPIO del connettore CN1.
  */
 enum class ExternalSensorPinMapping : uint8_t {
@@ -73,6 +102,17 @@ struct ExternalSensorBusCheckResult {
  * Effetti: configura il pin del pulsante BOOT, che vale LOW quando viene premuto.
  */
 void initializeBootButton();
+
+/*
+ * Acquisisce e media la tensione BAT_ADC disponibile sulla scheda.
+ * Parametri: nessuno.
+ * Restituisce: misure a WiFi spento e acceso, loro differenza e valutazione preliminare.
+ * Effetti: configura GPIO34; confronta retroilluminazione, LED RGB e WiFi
+ * spenti con retroilluminazione massima, tutti i canali RGB accesi e scansione
+ * radio alla massima potenza; infine rilascia i GPIO del LED, spegne la radio,
+ * lascia la retroilluminazione accesa e scrive la diagnosi.
+ */
+StartupBatteryCheckResult measureStartupBatteryVoltage();
 
 /*
  * Controlla se BOOT e stato premuto in modo stabile e alterna la vista.
@@ -348,6 +388,23 @@ void drawTemperatureGraphLegend();
 void initializeTemperatureSensorBus();
 
 /*
+ * Allinea il processo di misura al numero di sonde effettivamente utilizzabili.
+ * Parametri: nessuno.
+ * Restituisce: nulla.
+ * Effetti: con zero sonde arresta le acquisizioni; con almeno una sonda avvia
+ * subito la prima acquisizione prevista dal protocollo attivo.
+ */
+void updateMeasurementProcessState();
+
+/*
+ * Attende senza sospendere il processo di acquisizione gia attivo.
+ * Parametri: durationMilliseconds e la durata complessiva dell'attesa.
+ * Restituisce: nulla.
+ * Effetti: richiama periodicamente il processo misure e cede tempo al sistema.
+ */
+void waitWhileServicingMeasurements(uint32_t durationMilliseconds);
+
+/*
  * Verifica sul filo dati CN1 una risposta DHT completa, compreso il checksum.
  * Parametri: dataPin e il GPIO sul quale provare il protocollo DHT.
  * Restituisce: true se il GPIO ha restituito un frame DHT valido.
@@ -434,6 +491,17 @@ void updateTemperatureMeasurements(uint32_t currentTimeMilliseconds);
  * Effetti: avanza l'indice comune e richiede il ridisegno della vista se necessario.
  */
 void storeTemperatureHistorySample();
+
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+/*
+ * Collega nel firmware di prova i percorsi principali di tutti i driver sensore.
+ * Parametri: nessuno.
+ * Restituisce: nulla.
+ * Effetti: il ramo resta disattivato sulla scheda, ma impedisce al linker di
+ * eliminare inizializzazione e lettura durante la misura dell'occupazione.
+ */
+void retainAllSensorDriverCodeForFootprintMeasurement();
+#endif
 
 /*
  * Punto di avvio Arduino: prepara le periferiche, guida l'operatore sul touch e avvia le misure.

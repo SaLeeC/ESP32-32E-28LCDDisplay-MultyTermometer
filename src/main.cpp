@@ -1,7 +1,7 @@
 /*
  * Progetto: SondAris (ESP32-32E-28LCDDisplay-MultyTermometer).
  * Scopo: misurare la temperatura di piu sonde e presentare i dati sul display.
- * Versione firmware: v1.029 01-11-2026.
+ * Versione firmware: v1.034 01-11-2026.
  *
  * RISORSE DELLA SCHEDA DI RIFERIMENTO
  * - ESP32-WROOM-32E con Wi-Fi e Bluetooth disponibili; le funzioni wireless
@@ -14,8 +14,8 @@
  * - Slot microSD: GPIO5 chip-select, GPIO18 clock, GPIO19 MISO e GPIO23 MOSI;
  *   dopo il logo la tabella mostra capacità e spazio residuo o errori FS.
  * - Audio disponibile sulla scheda di riferimento, ma non ancora usato.
- * - L'eventuale gestione di una batteria dipende dalla revisione della scheda:
- *   non va presunta senza averne verificato schema e componenti.
+ * - La tensione batteria viene letta su GPIO34 prima col carico minimo e poi
+ *   con retroilluminazione, LED RGB e scansione WiFi alla massima potenza.
  *
  * COLLEGAMENTI USATI OGGI
  * - TFT: MISO GPIO12, MOSI GPIO13, clock GPIO14, CS GPIO15, DC GPIO2,
@@ -28,7 +28,7 @@
  *   se il touch non e disponibile; partecipa anche alla modalita di avvio.
  * - Touch: tre bersagli all'avvio mostrano il rilevamento a colori e calcolano
  *   una calibrazione temporanea; BOOT puo escludere il touch in ogni momento.
- * - La microSD e il bus sensori CN1 vengono verificati all'avvio; il risultato
+ * - Il bus sensori CN1 viene verificato prima del logo e della microSD; il risultato
  *   OneWire/DHT/I2C e la mappatura GPIO appaiono nel riepilogo e nel menu tecnico.
  * - Se il filesystem microSD e utilizzabile,
  *   viene preparata /SondAris_Data. Non si creano file dati o si formatta.
@@ -41,9 +41,9 @@
  * L'operatore dovra trovare un'interfaccia semplice e usare il touch come
  * strumento operativo; il pulsante fisico restera utile secondo il flusso
  * che definiremo. Sono previsti piu tipi di sonde, da progettare in seguito.
- * All'avvio viene mostrato il logo SondAris per un tempo configurabile,
- * poi vengono provati OneWire, DHT e I2C, quindi l'intera ricerca viene
+ * All'avvio vengono provati OneWire, DHT e I2C, quindi l'intera ricerca viene
  * ripetuta scambiando GPIO27 e GPIO22 se non si rileva alcun dispositivo.
+ * Il logo viene mostrato dopo la ricerca senza sospendere le misure gia attive.
  * Dopo la guida touch, l'operatore puo ripetere la ricerca con Start o BOOT.
  *
  * STATO ATTUALE
@@ -53,9 +53,10 @@
  * rilevamento. Senza scelta DHT non misura. La schermata Start consente di
  * ripetere la scansione se entrambi i cicli sono vuoti. La calibrazione touch resta in RAM;
  * se il touch viene escluso con BOOT, la scelta DHT non e disponibile e le
- * misure restano disattivate.
- * Ultima compilazione PlatformIO (2026-11-01): 27.900 byte RAM su 327.680 e
- * 445.661 byte Flash su 1.310.720, secondo il riepilogo del build.
+ * misure restano disattivate. Lo switch del processo misure resta fermo con
+ * zero sonde utilizzabili e parte appena almeno una sonda e configurata.
+ * Ultima compilazione PlatformIO (2026-11-01): 50.828 byte RAM su 327.680 e
+ * 914.253 byte Flash su 2.031.616, secondo il riepilogo del build.
  *
  * Questo file mantiene visibile il flusso generale: prepara le periferiche,
  * poi controlla a ogni ciclo touch, pulsante, sonde e schermo. I dettagli sono
@@ -69,14 +70,40 @@
  */
 #include <Arduino.h>
 #include <DallasTemperature.h>
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+#define DHT12 ADAFRUIT_DHT12_SENSOR_TYPE
+#endif
 #include <DHT.h>
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+#undef DHT12
+#endif
 #include <OneWire.h>
 #include <SD.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include <WiFi.h>
 #include <Wire.h>
 #include <math.h>
 #include <string.h>
+
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+#include <Adafruit_AHTX0.h>
+#include <Adafruit_AM2320.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_HTU21DF.h>
+#include <Adafruit_MCP9808.h>
+#include <Adafruit_SHT31.h>
+#include <Adafruit_SHT4x.h>
+#include <Adafruit_SHTC3.h>
+#include <Adafruit_Si7021.h>
+#include <ClosedCube_HDC1080.h>
+#include <DHT12.h>
+#include <SparkFunTMP102.h>
+#include <SparkFun_TMP117.h>
+#include <Temperature_LM75_Derived.h>
+#include <bme68xLibrary.h>
+#endif
 
 #include "Constant.h"
 #include "Var.h"
@@ -88,28 +115,41 @@
 #include "devices/DhtSensors.cpp"
 #include "devices/TemperatureSensors.cpp"
 #include "devices/BootButton.cpp"
+#include "devices/BatteryMonitor.cpp"
 #include "devices/TemperatureDisplay.cpp"
 #include "devices/Touchscreen.cpp"
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+#include "devices/SensorDriverFootprint.cpp"
+#endif
 
 /*
  * Avvia il firmware una sola volta dopo l'accensione o il reset della scheda.
- * La sequenza avvia seriale, pulsante e display, mostra il logo, controlla
- * microSD e bus CN1, poi guida il touch, la scelta DHT e l'eventuale retry sensori.
+ * La sequenza avvia seriale, pulsante e display, controlla CN1, mostra il logo,
+ * controlla la microSD e guida touch, scelta DHT ed eventuale retry sensori.
+ * Le attese successive continuano a servire ogni processo di misura gia attivo.
  */
 void setup() {
     Serial.begin(SERIAL_MONITOR_BAUD_RATE);
+#ifdef SENSOR_DRIVER_FOOTPRINT_PROBE
+    retainAllSensorDriverCodeForFootprintMeasurement();
+#endif
     initializeBootButton();
     initializeTemperatureDisplay();
     initializeTouchscreen();
+    startupBatteryCheckResult = measureStartupBatteryVoltage();
+    initializeTemperatureSensorBus();
     drawStartupPresentation();
-    delay(static_cast<uint32_t>(SONDARIS_STARTUP_LOGO_DURATION_SECONDS) * 1000UL);
+    waitWhileServicingMeasurements(
+        static_cast<uint32_t>(SONDARIS_STARTUP_LOGO_DURATION_SECONDS) *
+        1000UL);
 
     startupMicroSdCardCheckResult = verifyMicroSdCardAndPrepareDataDirectory();
-    initializeTemperatureSensorBus();
     drawStartupSummaryScreen(
         startupMicroSdCardCheckResult,
         startupExternalSensorBusCheckResult);
-    delay(static_cast<uint32_t>(STARTUP_SUMMARY_SCREEN_DURATION_SECONDS) * 1000UL);
+    waitWhileServicingMeasurements(
+        static_cast<uint32_t>(STARTUP_SUMMARY_SCREEN_DURATION_SECONDS) *
+        1000UL);
 
     runStartupTouchExperience(); // Dopo il riepilogo guida i tre tocchi e consente il recupero con BOOT.
     runStartupDhtSensorModelSelection(); // Il DHT viene configurato solo dopo la scelta esplicita dell'operatore.
