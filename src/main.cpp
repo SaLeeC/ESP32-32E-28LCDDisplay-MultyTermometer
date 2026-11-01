@@ -1,46 +1,66 @@
 /*
- * Progetto: ESP32-32E-28LCDDisplay-MultyTermometer.
+ * Progetto: SondAris (ESP32-32E-28LCDDisplay-MultyTermometer).
  * Scopo: misurare la temperatura di piu sonde e presentare i dati sul display.
+ * Versione firmware: v1.029 01-11-2026.
  *
  * RISORSE DELLA SCHEDA DI RIFERIMENTO
  * - ESP32-WROOM-32E con Wi-Fi e Bluetooth disponibili; le funzioni wireless
  *   non sono utilizzate dalla versione attuale.
  * - Display TFT resistivo ILI9341 da 2,8 pollici, 320 x 240 pixel.
- * - Touchscreen, slot SD e audio disponibili sulla scheda di riferimento,
- *   ma non ancora inizializzati o usati dal firmware.
+ * - Wiki della scheda di riferimento:
+ *   https://www.lcdwiki.com/2.8inch_ESP32-32E_Display
+ * - Touchscreen resistivo XPT2046: GPIO25 clock, GPIO32 MOSI, GPIO39 MISO,
+ *   GPIO33 CS e GPIO36 interrupt, letto tramite linee software dedicate.
+ * - Slot microSD: GPIO5 chip-select, GPIO18 clock, GPIO19 MISO e GPIO23 MOSI;
+ *   dopo il logo la tabella mostra capacità e spazio residuo o errori FS.
+ * - Audio disponibile sulla scheda di riferimento, ma non ancora usato.
  * - L'eventuale gestione di una batteria dipende dalla revisione della scheda:
  *   non va presunta senza averne verificato schema e componenti.
  *
  * COLLEGAMENTI USATI OGGI
  * - TFT: MISO GPIO12, MOSI GPIO13, clock GPIO14, CS GPIO15, DC GPIO2,
  *   retroilluminazione GPIO21; i dettagli sono in platformio.ini.
- * - Sonde DS18B20: bus OneWire su GPIO27, da alimentare a 3,3 V con una
- *   resistenza di pull-up da 4,7 kOhm tra dati e 3,3 V.
- * - Pulsante BOOT: GPIO0 alterna oggi vista numerica e grafico; GPIO0
- *   partecipa anche alla selezione della modalita di avvio dell'ESP32.
+ * - Connettore sensori CN1: ricerca OneWire/DHT su GPIO27 e poi GPIO22;
+ *   I2C prova SDA/SCL su GPIO27/22 e poi scambia i pin; una modalita per sessione.
+ * - Sonde DS18B20: in modalita OneWire usare alimentazione a 3,3 V e una
+ *   resistenza di pull-up da 4,7 kOhm tra il GPIO dati attivo e 3,3 V.
+ * - Pulsante BOOT: GPIO0 alterna vista numerica e grafico ed e il recupero
+ *   se il touch non e disponibile; partecipa anche alla modalita di avvio.
+ * - Touch: tre bersagli all'avvio mostrano il rilevamento a colori e calcolano
+ *   una calibrazione temporanea; BOOT puo escludere il touch in ogni momento.
+ * - La microSD e il bus sensori CN1 vengono verificati all'avvio; il risultato
+ *   OneWire/DHT/I2C e la mappatura GPIO appaiono nel riepilogo e nel menu tecnico.
+ * - Se il filesystem microSD e utilizzabile,
+ *   viene preparata /SondAris_Data. Non si creano file dati o si formatta.
+ * - La barra inferiore consente di alternare Valore/Andamento e apre il menu
+ *   tecnico tramite il pulsante ingranaggio.
  * - Le misure sono temporanee: fino a otto sonde, 120 campioni per sonda,
- *   circa due minuti di storico in RAM, senza salvataggio su SD.
+ *   circa due minuti OneWire o quattro minuti DHT in RAM, senza salvataggio.
  *
  * OBIETTIVO DEL PRODOTTO
  * L'operatore dovra trovare un'interfaccia semplice e usare il touch come
  * strumento operativo; il pulsante fisico restera utile secondo il flusso
  * che definiremo. Sono previsti piu tipi di sonde, da progettare in seguito.
- * All'avvio si vuole presentare una breve proposta grafica con testi di
- * dimensioni e colori diversi, seguita da un percorso guidato di tre tocchi
- * per familiarizzare l'operatore e verificare la calibrazione del touch.
- * Testi, grafica e modalita dei tre tocchi sono ancora da definire.
+ * All'avvio viene mostrato il logo SondAris per un tempo configurabile,
+ * poi vengono provati OneWire, DHT e I2C, quindi l'intera ricerca viene
+ * ripetuta scambiando GPIO27 e GPIO22 se non si rileva alcun dispositivo.
+ * Dopo la guida touch, l'operatore puo ripetere la ricerca con Start o BOOT.
  *
  * STATO ATTUALE
- * Il firmware riconosce le DS18B20, mostra valori e grafico e usa BOOT per
- * cambiare vista. Touch, schermata introduttiva, guida iniziale e supporto
- * ad altri tipi di sonda non sono ancora implementati.
- * Ultima misura di compilazione PlatformIO (2026-10-31): 25.780 byte RAM su
- * 327.680 e 298.957 byte Flash su 1.310.720, secondo il riepilogo del build.
+ * Il firmware controlla CN1 in sequenza OneWire, DHT e I2C, poi scambia i GPIO
+ * se il primo ciclo non trova dispositivi; registra i ROM
+ * OneWire, riconosce le DS18B20 e consente di scegliere DHT11 o DHT22 dopo il
+ * rilevamento. Senza scelta DHT non misura. La schermata Start consente di
+ * ripetere la scansione se entrambi i cicli sono vuoti. La calibrazione touch resta in RAM;
+ * se il touch viene escluso con BOOT, la scelta DHT non e disponibile e le
+ * misure restano disattivate.
+ * Ultima compilazione PlatformIO (2026-11-01): 27.900 byte RAM su 327.680 e
+ * 445.661 byte Flash su 1.310.720, secondo il riepilogo del build.
  *
  * Questo file mantiene visibile il flusso generale: prepara le periferiche,
- * poi controlla a ogni ciclo il pulsante, le sonde e lo schermo. I dettagli
- * sono raccolti nei moduli sotto include/ e vengono aggiunti esplicitamente
- * qui, secondo il metodo scelto per questo progetto.
+ * poi controlla a ogni ciclo touch, pulsante, sonde e schermo. I dettagli sono
+ * raccolti nei moduli sotto include/ e vengono aggiunti esplicitamente qui,
+ * secondo il metodo scelto per questo progetto.
  *
  * Ordine degli include del progetto:
  * 1. librerie necessarie ai moduli;
@@ -49,8 +69,12 @@
  */
 #include <Arduino.h>
 #include <DallasTemperature.h>
+#include <DHT.h>
 #include <OneWire.h>
+#include <SD.h>
+#include <SPI.h>
 #include <TFT_eSPI.h>
+#include <Wire.h>
 #include <math.h>
 #include <string.h>
 
@@ -59,20 +83,37 @@
 #include "Sub.h"
 
 // Ogni frammento viene incluso una sola volta e non viene compilato separatamente da PlatformIO.
+#include "devices/MicroSdCard.cpp"
+#include "devices/ExternalI2cBus.cpp"
+#include "devices/DhtSensors.cpp"
 #include "devices/TemperatureSensors.cpp"
 #include "devices/BootButton.cpp"
 #include "devices/TemperatureDisplay.cpp"
+#include "devices/Touchscreen.cpp"
 
 /*
  * Avvia il firmware una sola volta dopo l'accensione o il reset della scheda.
- * La sequenza lascia per primi seriale e input, poi prepara il display e infine
- * cerca le sonde prima di mostrare la schermata iniziale.
+ * La sequenza avvia seriale, pulsante e display, mostra il logo, controlla
+ * microSD e bus CN1, poi guida il touch, la scelta DHT e l'eventuale retry sensori.
  */
 void setup() {
     Serial.begin(SERIAL_MONITOR_BAUD_RATE);
     initializeBootButton();
     initializeTemperatureDisplay();
+    initializeTouchscreen();
+    drawStartupPresentation();
+    delay(static_cast<uint32_t>(SONDARIS_STARTUP_LOGO_DURATION_SECONDS) * 1000UL);
+
+    startupMicroSdCardCheckResult = verifyMicroSdCardAndPrepareDataDirectory();
     initializeTemperatureSensorBus();
+    drawStartupSummaryScreen(
+        startupMicroSdCardCheckResult,
+        startupExternalSensorBusCheckResult);
+    delay(static_cast<uint32_t>(STARTUP_SUMMARY_SCREEN_DURATION_SECONDS) * 1000UL);
+
+    runStartupTouchExperience(); // Dopo il riepilogo guida i tre tocchi e consente il recupero con BOOT.
+    runStartupDhtSensorModelSelection(); // Il DHT viene configurato solo dopo la scelta esplicita dell'operatore.
+    runStartupNoSensorRecovery(); // Se entrambi i cicli sono vuoti attende Start o BOOT e ripete la ricerca.
     drawCurrentTemperatureScreen();
 }
 
@@ -85,6 +126,7 @@ void loop() {
     const uint32_t currentTimeMilliseconds = millis(); // Un unico riferimento temporale per questo passaggio del ciclo.
 
     updateBootButton(currentTimeMilliseconds);
+    updateTouchscreen();
     updateTemperatureMeasurements(currentTimeMilliseconds);
 
     if (temperatureDisplayNeedsRedraw) {

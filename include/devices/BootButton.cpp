@@ -30,6 +30,7 @@ void updateBootButton(uint32_t currentTimeMilliseconds) {
         if (stableButtonLevel == LOW) {
             // Si cambia vista solo alla pressione; il rilascio non produce un secondo cambio.
             graphViewIsActive = !graphViewIsActive;
+            technicalMenuIsActive = false; // BOOT torna alla vista scelta anche se era aperto il menu tecnico.
             temperatureDisplayNeedsRedraw = true;
         }
     }
